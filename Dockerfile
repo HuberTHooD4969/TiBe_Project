@@ -11,13 +11,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /data /app/downloads_server /app/frontend
+RUN mkdir -p /app/downloads_server /app/frontend
 
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-RUN useradd -m appuser && chown -R appuser:appuser /app /data
+RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \

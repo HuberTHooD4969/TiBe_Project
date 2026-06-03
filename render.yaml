@@ -31,7 +31,3 @@ services:
         value: "2"
       - key: CORS_ORIGINS
         value: "https://huberthood4969.github.io"
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
