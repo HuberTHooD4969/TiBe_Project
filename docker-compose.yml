@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  tibe:
+    build: .
+    container_name: tibe-ultra
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-this-to-a-very-long-random-secret-key}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY:-}
+      - PAYSTACK_PUBLIC_KEY=${PAYSTACK_PUBLIC_KEY:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - APPLE_CLIENT_ID=${APPLE_CLIENT_ID:-}
+      - APPLE_TEAM_ID=${APPLE_TEAM_ID:-}
+      - APPLE_KEY_ID=${APPLE_KEY_ID:-}
+      - APPLE_PRIVATE_KEY_PATH=${APPLE_PRIVATE_KEY_PATH:-}
+      - AD_WATCH_DURATION_SECONDS=${AD_WATCH_DURATION_SECONDS:-30}
+      - AD_WATCH_COOLDOWN_MINUTES=${AD_WATCH_COOLDOWN_MINUTES:-60}
+      - MAX_FRAME_WORKERS=${MAX_FRAME_WORKERS:-4}
+      - PORT=8000
+    volumes:
+      - tibe_data:/data
+      - ./downloads_server:/app/downloads_server
+
+volumes:
+  tibe_data:

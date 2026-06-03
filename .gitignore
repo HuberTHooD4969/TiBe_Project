@@ -1,8 +1,16 @@
 .venv/
 __pycache__/
 Downloads/
+downloads_server/
+build/
+dist/
 *.mp4
 *.m4a
 *.webm
 *.part
+*.spec
 .DS_Store
+*.db
+test_*.py
+.env
+.env.local

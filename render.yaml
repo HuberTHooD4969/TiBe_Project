@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: tibe-ultra
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend_api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: /data/tibe.db
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: APPLE_CLIENT_ID
+        sync: false
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_KEY_ID
+        sync: false
+      - key: AD_WATCH_DURATION_SECONDS
+        value: "30"
+      - key: AD_WATCH_COOLDOWN_MINUTES
+        value: "60"
+      - key: MAX_FRAME_WORKERS
+        value: "2"
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1

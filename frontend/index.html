@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TiBe - Ultra AI Video Suite</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="background-effects">
+        <div class="glow-orb orb-1"></div>
+        <div class="glow-orb orb-2"></div>
+    </div>
+
+    <!-- ======== AUTH SECTION ======== -->
+    <div id="auth-section" class="container">
+        <header>
+            <h1 class="logo-text">TiBe <span class="badge">ULTRA</span></h1>
+            <p class="subtitle">Next-Generation AI Video Processing</p>
+        </header>
+
+        <!-- Login Form -->
+        <div id="login-form" class="glass-panel auth-panel">
+            <h2 class="auth-title">Welcome Back</h2>
+            <p class="auth-subtitle">Sign in to your account</p>
+            <div class="input-group">
+                <label for="login-email">Email</label>
+                <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <div class="input-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+            </div>
+            <button id="login-btn" class="primary-btn">SIGN IN</button>
+            <div class="oauth-divider"><span>or continue with</span></div>
+            <div class="oauth-btns">
+                <button id="google-login-btn" class="oauth-btn google-btn">
+                    <svg viewBox="0 0 48 48" width="20" height="20"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.54 28.59A14.5 14.5 0 019.5 24c0-1.59.28-3.14.76-4.59l-7.98-6.19A23.9 23.9 0 000 24c0 3.77.87 7.35 2.56 10.56l7.98-5.97z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 5.97C6.51 42.62 14.62 48 24 48z"/></svg>
+                    Google
+                </button>
+                <button id="apple-login-btn" class="oauth-btn apple-btn">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                    Apple
+                </button>
+            </div>
+            <p class="auth-switch">Don't have an account? <a href="#" id="show-register">Register</a></p>
+            <div id="login-error" class="auth-error hidden"></div>
+        </div>
+
+        <!-- Register Form -->
+        <div id="register-form" class="glass-panel auth-panel hidden">
+            <h2 class="auth-title">Create Account</h2>
+            <p class="auth-subtitle">Start with free downloads</p>
+            <div class="input-group">
+                <label for="reg-email">Email</label>
+                <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <div class="input-group">
+                <label for="reg-password">Password</label>
+                <input type="password" id="reg-password" placeholder="At least 6 characters" autocomplete="new-password">
+            </div>
+            <button id="register-btn" class="primary-btn">CREATE ACCOUNT</button>
+            <div class="oauth-divider"><span>or continue with</span></div>
+            <div class="oauth-btns">
+                <button id="google-reg-btn" class="oauth-btn google-btn">
+                    <svg viewBox="0 0 48 48" width="20" height="20"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.54 28.59A14.5 14.5 0 019.5 24c0-1.59.28-3.14.76-4.59l-7.98-6.19A23.9 23.9 0 000 24c0 3.77.87 7.35 2.56 10.56l7.98-5.97z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 5.97C6.51 42.62 14.62 48 24 48z"/></svg>
+                    Google
+                </button>
+                <button id="apple-reg-btn" class="oauth-btn apple-btn">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                    Apple
+                </button>
+            </div>
+            <p class="auth-switch">Already have an account? <a href="#" id="show-login">Sign In</a></p>
+            <div id="register-error" class="auth-error hidden"></div>
+        </div>
+    </div>
+
+    <!-- ======== MAIN APP SECTION ======== -->
+    <div id="app-section" class="container hidden">
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <h1 class="logo-text" style="font-size:1.8rem;margin:0;">TiBe <span class="badge" style="font-size:0.6rem;">ULTRA</span></h1>
+            <div class="top-bar-right">
+                <span id="unit-badge" class="unit-badge">0 Units</span>
+                <button id="open-pricing-btn" class="ghost-btn">Buy Units</button>
+                <button id="logout-btn" class="ghost-btn">Sign Out</button>
+            </div>
+        </div>
+
+        <main class="glass-panel">
+            <div class="input-group">
+                <label for="video-url">Video Link</label>
+                <input type="url" id="video-url" placeholder="Paste your link here" autocomplete="off">
+            </div>
+
+            <div class="options-row">
+                <div class="quality-selector">
+                    <label>Resolution</label>
+                    <div class="segment-control" id="quality-options">
+                        <button class="segment-btn" data-val="720p">720p</button>
+                        <button class="segment-btn active" data-val="1080p">1080p</button>
+                        <button class="segment-btn pro-badge" data-val="2K">2K</button>
+                        <button class="segment-btn pro-badge" data-val="4K">4K</button>
+                    </div>
+                </div>
+                <div class="enhancement-toggle">
+                    <label>Ultra AI Enhancement</label>
+                    <label class="switch">
+                        <input type="checkbox" id="ultra-enhance" checked>
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <button id="start-btn" class="primary-btn pulse-anim">
+                START ULTRA ENGINE
+            </button>
+
+            <div id="processing-dashboard" class="hidden">
+                <div class="status-header">
+                    <span id="status-text" class="status-text">Engine Status: Ready</span>
+                    <span id="progress-percent" class="progress-percent">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div id="progress-bar" class="progress-fill"></div>
+                </div>
+            </div>
+
+            <div id="result-dashboard" class="hidden">
+                <a id="download-btn" href="#" class="success-btn" download>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Download Enhanced Video
+                </a>
+            </div>
+        </main>
+    </div>
+
+    <!-- ======== PRICING SECTION (Modal) ======== -->
+    <div id="pricing-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel pricing-modal">
+            <div class="modal-header">
+                <h2>Purchase Units</h2>
+                <button id="close-pricing-btn" class="close-btn">&times;</button>
+            </div>
+            <p class="pricing-intro">Each video download costs <strong>1 unit</strong>. Choose a plan that fits your needs.</p>
+            <div class="pricing-grid" id="pricing-grid">
+                <!-- Populated by JS -->
+            </div>
+            <div class="payment-methods" id="payment-methods-section" style="display:none;">
+                <hr>
+                <h3 style="margin:20px 0 10px;text-align:center;">Pay with Your Card</h3>
+                <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;margin-bottom:15px;">Secured by Paystack — Visa, Mastercard, Verve accepted</p>
+                <div class="pay-btns">
+                    <button id="pay-paystack-btn" class="primary-btn" style="padding:18px;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;vertical-align:middle;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>
+                        Pay with Credit / Debit Card
+                    </button>
+                </div>
+                <div id="payment-status" class="auth-error"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======== AD OVERLAY (Free Tier) ======== -->
+    <div id="ad-overlay" class="modal-overlay hidden">
+        <div class="modal-content glass-panel ad-panel">
+            <div class="modal-header">
+                <h2>Free Tier: Quick Ad</h2>
+            </div>
+            <p class="ad-intro">Watch a short ad to unlock a free download. No payment needed!</p>
+            <div id="ad-countdown" class="ad-countdown">30</div>
+            <p class="ad-label">seconds remaining</p>
+            <div class="ad-container" id="ad-container">
+                <!-- Google AdSense ad will be placed here -->
+                <div class="ad-placeholder">
+                    <p>Advertisement</p>
+                    <div id="google-adsense-slot">
+                        <!-- Google AdSense code goes here -->
+                        <ins class="adsbygoogle"
+                            style="display:block"
+                            data-ad-client="ca-pub-xxxxxxxxxxxxxxxx"
+                            data-ad-slot="xxxxxxxxxx"
+                            data-ad-format="horizontal">
+                        </ins>
+                    </div>
+                </div>
+            </div>
+            <div class="ad-timer-bar">
+                <div id="ad-timer-fill" class="ad-timer-fill"></div>
+            </div>
+            <p id="ad-status" class="ad-status">Please wait while the ad loads...</p>
+        </div>
+    </div>
+
+    <!-- ======== Mobile Save Guide ======== -->
+    <div id="mobile-guide-overlay" class="modal-overlay hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2>Save to Camera Roll Guide</h2>
+                <button id="close-guide-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-intro">Mobile browsers cannot save files directly to your Photos app. Follow these quick steps:</p>
+                <div class="tab-control">
+                    <button class="tab-btn active" id="tab-ios">iPhone (iOS)</button>
+                    <button class="tab-btn" id="tab-android">Android</button>
+                </div>
+                <div class="guide-steps animate-fade" id="guide-ios-content">
+                    <div class="step-card">
+                        <div class="step-num">1</div>
+                        <div class="step-info">
+                            <h3>Start the Download</h3>
+                            <p>Tap the download button and wait for your browser download to finish.</p>
+                        </div>
+                    </div>
+                    <div class="step-card">
+                        <div class="step-num">2</div>
+                        <div class="step-info">
+                            <h3>Save to Photos</h3>
+                            <p>Tap the download icon in your browser's address bar, open the video, tap <strong>Share</strong>, choose <strong>"Save Video"</strong>.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="guide-steps animate-fade hidden" id="guide-android-content">
+                    <div class="step-card">
+                        <div class="step-num">1</div>
+                        <div class="step-info">
+                            <h3>Open Downloaded File</h3>
+                            <p>Tap <strong>Open</strong> once the download finishes, or go to your <strong>Downloads</strong> folder.</p>
+                        </div>
+                    </div>
+                    <div class="step-card">
+                        <div class="step-num">2</div>
+                        <div class="step-info">
+                            <h3>Save to Gallery</h3>
+                            <p>Open the video, tap the three dots, select <strong>Save to Device/Gallery</strong>.</p>
+                        </div>
+                    </div>
+                </div>
+                <button id="guide-ok-btn" class="primary-btn">GOT IT, DOWNLOAD NOW</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

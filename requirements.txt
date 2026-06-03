@@ -1,5 +1,10 @@
-customtkinter
-opencv-python
+fastapi
+uvicorn
+pydantic
+python-multipart
+opencv-python-headless
 numpy
 yt-dlp
 imageio-ffmpeg
+python-jose[cryptography]
+httpx
