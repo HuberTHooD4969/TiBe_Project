@@ -92,6 +92,12 @@
             </div>
         </div>
 
+        <div id="subscription-banner" class="subscription-banner hidden">
+            <span>Subscription: <strong id="sub-plan-name-display"></strong></span>
+            <span class="sub-renewal">Renews: <span id="sub-renewal-date"></span></span>
+            <button id="cancel-sub-btn" class="ghost-btn" style="color:var(--error-red);">Cancel</button>
+        </div>
+
         <main class="glass-panel">
             <div class="input-group">
                 <label for="video-url">Video Link</label>
@@ -144,21 +150,25 @@
     <div id="pricing-modal" class="modal-overlay hidden">
         <div class="modal-content glass-panel pricing-modal">
             <div class="modal-header">
-                <h2>Purchase Units</h2>
+                <h2>Top Up Units</h2>
                 <button id="close-pricing-btn" class="close-btn">&times;</button>
             </div>
-            <p class="pricing-intro">Each video download costs <strong>1 unit</strong>. Choose a plan that fits your needs.</p>
+            <p class="pricing-intro">Each video costs <strong>1 unit</strong>. Buy one-time packs or subscribe monthly.</p>
+            <div class="pricing-toggle" id="pricing-toggle">
+                <button class="toggle-btn active" data-mode="onetime">One-Time Packs</button>
+                <button class="toggle-btn" data-mode="subscription">Monthly Subscriptions</button>
+            </div>
             <div class="pricing-grid" id="pricing-grid">
                 <!-- Populated by JS -->
             </div>
             <div class="payment-methods" id="payment-methods-section" style="display:none;">
                 <hr>
-                <h3 style="margin:20px 0 10px;text-align:center;">Pay with Your Card</h3>
+                <h3 style="margin:20px 0 10px;text-align:center;">Complete Purchase</h3>
                 <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;margin-bottom:15px;">Secured by Paystack — Visa, Mastercard, Verve accepted</p>
                 <div class="pay-btns">
                     <button id="pay-paystack-btn" class="primary-btn" style="padding:18px;">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;vertical-align:middle;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>
-                        Pay with Credit / Debit Card
+                        Continue to Paystack
                     </button>
                 </div>
                 <div id="payment-status" class="auth-error"></div>

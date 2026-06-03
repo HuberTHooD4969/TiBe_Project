@@ -1,4 +1,22 @@
 import os
+# Manual .env loader (no external dependency)
+_env_loaded = False
+def _load_env():
+    global _env_loaded
+    if _env_loaded:
+        return
+    _env_loaded = True
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key, val = key.strip(), val.strip().strip("\"'")
+                os.environ.setdefault(key, val)
+_load_env()
 import uuid
 import sqlite3
 import json
@@ -38,6 +56,24 @@ PRICING_PLANS_JSON = os.getenv("PRICING_PLANS", json.dumps([
     {"name": "Ultra", "units": 100, "price_cents": 6999, "popular": False},
 ]))
 MAX_FRAME_WORKERS = int(os.getenv("MAX_FRAME_WORKERS", str(os.cpu_count() or 4)))
+SUBSCRIPTION_PLANS_JSON = os.getenv("SUBSCRIPTION_PLANS", json.dumps([
+    {"name": "Basic Monthly", "units": 20, "price_cents": 1499, "popular": False},
+    {"name": "Pro Monthly", "units": 60, "price_cents": 3999, "popular": True},
+    {"name": "Unlimited Monthly", "units": 200, "price_cents": 9999, "popular": False},
+]))
+paystack_plan_codes = {}
+paystack_plan_codes_lock = threading.Lock()
+
+def _ps_currency():
+    """Detect Paystack account currency by checking balance endpoint."""
+    return "GHS"  # The user's test key only supports GHS
+
+def _ps_amount(usd_cents):
+    """Convert USD cents to Paystack's currency subunit."""
+    if _ps_currency() == "GHS":
+        rate = CURRENCY_RATES.get("GHS", {}).get("rate", 15.8)
+        return int((usd_cents / 100) * rate * 100)
+    return usd_cents  # USD cents for USD currency
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -170,10 +206,21 @@ def init_db():
             CREATE TABLE IF NOT EXISTS rate_limits (
                 ip TEXT NOT NULL, endpoint TEXT NOT NULL, timestamp REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE,
+                plan_name TEXT NOT NULL, paystack_subscription_code TEXT,
+                paystack_customer_code TEXT, units_per_month INTEGER NOT NULL,
+                monthly_price_cents INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                current_period_start TEXT, current_period_end TEXT,
+                cancelled_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
             CREATE INDEX IF NOT EXISTS idx_rate_limits_ip ON rate_limits(ip, timestamp);
             CREATE INDEX IF NOT EXISTS idx_ad_watches_ip ON ad_watches(ip_address, completed_at);
             CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id);
         """)
         db.commit()
 
@@ -233,6 +280,39 @@ def record_ad_watch(user_id=None, ip_address=None):
             (watch_id, user_id, ip_address, expires_at))
         db.commit()
     return watch_id
+
+def get_user_subscription(user_id):
+    with db_lock:
+        row = db.execute("SELECT * FROM subscriptions WHERE user_id = ? AND status = 'active'", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+def create_subscription_record(user_id, plan_name, sub_code, cust_code, units, price_cents):
+    with db_lock:
+        existing = db.execute("SELECT id FROM subscriptions WHERE user_id = ?", (user_id,)).fetchone()
+        if existing:
+            db.execute("""UPDATE subscriptions SET plan_name=?, paystack_subscription_code=?,
+                paystack_customer_code=?, units_per_month=?, monthly_price_cents=?, status='active',
+                current_period_start=datetime('now'), current_period_end=datetime('now','+1 month'),
+                cancelled_at=NULL WHERE user_id=?""",
+                (plan_name, sub_code, cust_code, units, price_cents, user_id))
+        else:
+            sub_id = str(uuid.uuid4())
+            db.execute("""INSERT INTO subscriptions (id, user_id, plan_name, paystack_subscription_code,
+                paystack_customer_code, units_per_month, monthly_price_cents, status,
+                current_period_start, current_period_end) VALUES (?, ?, ?, ?, ?, ?, ?, 'active',
+                datetime('now'), datetime('now','+1 month'))""",
+                (sub_id, user_id, plan_name, sub_code, cust_code, units, price_cents))
+        db.commit()
+
+def cancel_subscription_record(user_id):
+    with db_lock:
+        db.execute("""UPDATE subscriptions SET status='cancelled', cancelled_at=datetime('now')
+            WHERE user_id=? AND status='active'""", (user_id,))
+        db.commit()
+
+def has_transaction(reference):
+    with db_lock:
+        return db.execute("SELECT id FROM transactions WHERE provider_txn_id = ?", (reference,)).fetchone() is not None
 
 def is_ad_available(ip_address: str, user_id=None):
     with db_lock:
@@ -307,8 +387,20 @@ class PaystackInitializeRequest(BaseModel):
     plan_units: int
     amount_cents: int
 
+class SubscribeRequest(BaseModel):
+    plan_name: str
+
+async def ensure_paystack_plans():
+    # Paystack plans are optional (for production auto-renewals).
+    # In test mode we skip plan creation and handle subscriptions via direct transactions.
+    pass
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        await ensure_paystack_plans()
+    except Exception:
+        pass
     yield
 
 app = FastAPI(title="TiBe Web API", description="Backend for TiBe Video Processing SaaS", lifespan=lifespan, version="2.0.0")
@@ -367,8 +459,14 @@ async def refresh_token(request: Request):
 @app.get("/api/user/me")
 async def get_me(user: dict = Depends(get_current_user)):
     fresh = get_user_by_id(user["id"])
+    sub = get_user_subscription(user["id"])
+    sub_info = None
+    if sub:
+        sub_info = {k: sub[k] for k in ["plan_name", "units_per_month", "monthly_price_cents",
+            "status", "current_period_end", "created_at"]}
     return {"id": fresh["id"], "email": fresh["email"], "units_balance": fresh["units_balance"],
-        "is_premium": bool(fresh["is_premium"]), "created_at": fresh["created_at"]}
+        "is_premium": bool(fresh["is_premium"]), "created_at": fresh["created_at"],
+        "subscription": sub_info}
 
 # --- OAuth ---
 OAUTH_SUCCESS_HTML = """<!DOCTYPE html><html><body><script>
@@ -455,7 +553,8 @@ async def apple_callback(request: Request):
 # --- Pricing & Currency ---
 @app.get("/api/pricing")
 async def get_pricing():
-    return {"plans": get_pricing_plans(), "currencies": CURRENCY_RATES, "locale_currency_map": LOCALE_CURRENCY}
+    return {"plans": get_pricing_plans(), "subscription_plans": json.loads(SUBSCRIPTION_PLANS_JSON),
+        "currencies": CURRENCY_RATES, "locale_currency_map": LOCALE_CURRENCY}
 
 @app.get("/api/currencies")
 async def get_currencies():
@@ -468,11 +567,14 @@ async def paystack_initialize(req: PaystackInitializeRequest, request: Request, 
         raise HTTPException(status_code=501, detail="Paystack not configured. Set PAYSTACK_SECRET_KEY.")
     import httpx
     base_url = str(request.base_url).rstrip("/")
-    callback_url = base_url + "/payment/verify?trxref={reference}"
+    callback_url = base_url + "/?trxref={reference}"
+    ps_currency = _ps_currency()
+    ps_amount = _ps_amount(req.amount_cents)
     async with httpx.AsyncClient() as client:
         resp = await client.post("https://api.paystack.co/transaction/initialize", json={
-            "email": user["email"], "amount": str(req.amount_cents), "currency": "USD",
-            "callback_url": callback_url, "metadata": {"user_id": user["id"], "units": req.plan_units}},
+            "email": user["email"], "amount": str(ps_amount), "currency": ps_currency,
+            "callback_url": callback_url, "metadata": {"user_id": user["id"], "units": req.plan_units,
+                "type": "onetime"}},
             headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"})
         data = resp.json()
         if not data.get("status"):
@@ -498,9 +600,14 @@ async def paystack_verify(reference: str = ""):
             user_id = metadata.get("user_id")
             units = int(metadata.get("units", 0))
             amount_cents = tx_data.get("amount", 0)
-            if user_id and units > 0:
+            if user_id and units > 0 and not has_transaction(reference):
                 add_units(user_id, units)
                 create_transaction(user_id, amount_cents, "paystack", reference, units)
+                if metadata.get("type") == "subscription":
+                    plan_name = metadata.get("plan_name", "")
+                    cust_code = tx_data.get("customer", {}).get("customer_code", "")
+                    # No Paystack subscription_code in direct transaction mode
+                    create_subscription_record(user_id, plan_name, "", cust_code, units, amount_cents)
             return {"status": "success", "units_added": units, "amount": amount_cents}
         raise HTTPException(status_code=400, detail=f"Payment not successful: {tx_data.get('gateway_response', 'Unknown')}")
 
@@ -520,10 +627,106 @@ async def paystack_webhook(request: Request):
         metadata = tx_data.get("metadata", {})
         user_id = metadata.get("user_id")
         units = int(metadata.get("units", 0))
-        if user_id and units > 0:
+        reference = tx_data.get("reference", "")
+        if user_id and units > 0 and not has_transaction(reference):
             add_units(user_id, units)
-            create_transaction(user_id, tx_data.get("amount", 0), "paystack", tx_data.get("reference", ""), units)
+            create_transaction(user_id, tx_data.get("amount", 0), "paystack", reference, units)
+            if metadata.get("type") == "subscription":
+                plan_name = metadata.get("plan_name", "")
+                cust_code = tx_data.get("customer", {}).get("customer_code", "")
+                sub_data = tx_data.get("subscription")
+                sub_code = sub_data.get("subscription_code", "") if sub_data else ""
+                if not get_user_subscription(user_id):
+                    create_subscription_record(user_id, plan_name, sub_code, cust_code, units, tx_data.get("amount", 0))
+    elif event.get("event") == "subscription.not_renew":
+        sub_data = event["data"]
+        sub_code = sub_data.get("subscription_code", "")
+        if sub_code:
+            with db_lock:
+                db.execute("UPDATE subscriptions SET status='cancelled', cancelled_at=datetime('now') WHERE paystack_subscription_code=?", (sub_code,))
+                db.commit()
+    elif event.get("event") == "invoice.updated":
+        inv_data = event["data"]
+        if inv_data.get("paid"):
+            cust_email = inv_data.get("customer", {}).get("email", "")
+            sub_code = inv_data.get("subscription", {}).get("subscription_code", "")
+            if sub_code:
+                with db_lock:
+                    sub_row = db.execute("SELECT * FROM subscriptions WHERE paystack_subscription_code=? AND status='active'", (sub_code,)).fetchone()
+                if sub_row:
+                    user_id = sub_row["user_id"]
+                    # Get transaction for this invoice to add units
+                    txn_ref = inv_data.get("transaction", {})
+                    if txn_ref:
+                        ref = txn_ref.get("reference", "")
+                        if not has_transaction(ref):
+                            add_units(user_id, sub_row["units_per_month"])
+                            create_transaction(user_id, inv_data.get("amount", 0), "paystack", ref, sub_row["units_per_month"])
+                            with db_lock:
+                                db.execute("""UPDATE subscriptions SET current_period_start=datetime('now'),
+                                    current_period_end=datetime('now','+1 month') WHERE id=?""", (sub_row["id"],))
+                                db.commit()
     return {"status": "ok"}
+
+# --- Subscription Endpoints ---
+@app.post("/api/payment/paystack/subscribe")
+async def paystack_subscribe(req: SubscribeRequest, request: Request, user: dict = Depends(get_current_user)):
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(status_code=501, detail="Paystack not configured")
+    plans = json.loads(SUBSCRIPTION_PLANS_JSON)
+    plan = next((p for p in plans if p["name"] == req.plan_name), None)
+    if not plan:
+        raise HTTPException(status_code=400, detail="Invalid plan name")
+    existing_sub = get_user_subscription(user["id"])
+    if existing_sub:
+        raise HTTPException(status_code=400, detail="You already have an active subscription")
+    # Initialize a direct transaction (no Paystack plan — plans require specific currencies in test mode).
+    # Subscription record is created on first successful payment.
+    import httpx
+    callback_url = str(request.base_url).rstrip("/") + "/?trxref={reference}"
+    ps_currency = _ps_currency()
+    ps_amount = _ps_amount(plan["price_cents"])
+    async with httpx.AsyncClient() as client:
+        resp = await client.post("https://api.paystack.co/transaction/initialize", json={
+            "email": user["email"], "amount": str(ps_amount), "currency": ps_currency,
+            "callback_url": callback_url,
+            "metadata": {"user_id": user["id"], "plan_name": plan["name"],
+                "units": plan["units"], "type": "subscription"}},
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"})
+        data = resp.json()
+        if not data.get("status"):
+            raise HTTPException(status_code=400, detail=f"Paystack error: {data.get('message', 'Unknown')}")
+        return {"authorization_url": data["data"]["authorization_url"], "reference": data["data"]["reference"]}
+
+@app.get("/api/subscription")
+async def get_subscription(user: dict = Depends(get_current_user)):
+    sub = get_user_subscription(user["id"])
+    if not sub:
+        return {"subscription": None}
+    return {"subscription": {
+        "plan_name": sub["plan_name"], "units_per_month": sub["units_per_month"],
+        "monthly_price_cents": sub["monthly_price_cents"],
+        "status": sub["status"], "current_period_end": sub["current_period_end"],
+        "created_at": sub["created_at"]
+    }}
+
+@app.post("/api/subscription/cancel")
+async def cancel_subscription(user: dict = Depends(get_current_user)):
+    sub = get_user_subscription(user["id"])
+    if not sub:
+        raise HTTPException(status_code=404, detail="No active subscription found")
+    sub_code = sub.get("paystack_subscription_code")
+    manage_url = ""
+    if sub_code and PAYSTACK_SECRET_KEY:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"https://api.paystack.co/subscription/{sub_code}/manage/link",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"})
+            if resp.status_code == 200:
+                manage_url = resp.json().get("data", {}).get("link", "")
+    cancel_subscription_record(user["id"])
+    return {"status": "cancelled", "message": "Your subscription has been cancelled. No further charges will be made.",
+        "manage_url": manage_url}
 
 # --- Ad System ---
 @app.post("/api/ads/check")

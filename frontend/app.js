@@ -6,8 +6,6 @@ document.addEventListener("DOMContentLoaded", () => {
     let selectedQuality = "1080p";
     let pollInterval = null;
     let selectedPlan = null;
-    let adWatchId = null;
-    let plannedUseUnits = false;
 
     // ========== DOM REFS ==========
     const authSection = document.getElementById("auth-section");
@@ -272,6 +270,7 @@ document.addEventListener("DOMContentLoaded", () => {
         authSection.classList.add("hidden");
         appSection.classList.remove("hidden");
         updateUnitBadge();
+        updateSubscriptionUI();
     }
 
     function updateUnitBadge() {
@@ -323,10 +322,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const preData = await preRes.json();
 
             if (preData.units_balance > 0) {
-                plannedUseUnits = true;
                 await startProcessing(url);
             } else if (preData.ad_available) {
-                plannedUseUnits = false;
                 await showAdAndProcess(url);
             } else {
                 handleError("No units remaining and ad not available. Please buy units or wait for ad cooldown.");
@@ -483,11 +480,82 @@ document.addEventListener("DOMContentLoaded", () => {
         progressBar.style.boxShadow = "0 0 10px #ff3366";
     }
 
+    // ========== PRICING MODE TOGGLE ==========
+    let pricingMode = "onetime"; // "onetime" | "subscription"
+    let cachedPricingData = null;
+
+    const toggleBtns = document.querySelectorAll(".toggle-btn");
+    if (toggleBtns.length) {
+        toggleBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                toggleBtns.forEach(b => b.classList.remove("active"));
+                btn.classList.add("active");
+                pricingMode = btn.dataset.mode;
+                const plans = pricingMode === "subscription"
+                    ? (cachedPricingData?.subscription_plans || [])
+                    : (cachedPricingData?.plans || []);
+                paymentMethodsSection.style.display = "none";
+                selectedPlan = null;
+                renderPricing(plans);
+            });
+        });
+    }
+
+    // ========== SUBSCRIPTION UI ==========
+    const subBanner = document.getElementById("subscription-banner");
+    const subPlanNameDisplay = document.getElementById("sub-plan-name-display");
+    const subRenewalDate = document.getElementById("sub-renewal-date");
+    const cancelSubBtn = document.getElementById("cancel-sub-btn");
+
+    function updateSubscriptionUI() {
+        if (!subBanner) return;
+        apiFetch("/api/subscription").then(r => r.json()).then(data => {
+            const sub = data.subscription;
+            if (sub && sub.status === "active") {
+                subBanner.classList.remove("hidden");
+                subPlanNameDisplay.textContent = sub.plan_name;
+                if (sub.current_period_end) {
+                    const d = new Date(sub.current_period_end.replace(" ", "T") + "Z");
+                    subRenewalDate.textContent = d.toLocaleDateString(undefined, {
+                        year: "numeric", month: "short", day: "numeric"
+                    });
+                }
+            } else {
+                subBanner.classList.add("hidden");
+            }
+        }).catch(() => {
+            subBanner.classList.add("hidden");
+        });
+    }
+
+    if (cancelSubBtn) {
+        cancelSubBtn.addEventListener("click", async () => {
+            if (!confirm("Cancel your subscription? No further charges will be made. Your remaining units are yours to keep.")) return;
+            try {
+                const res = await apiFetch("/api/subscription/cancel", { method: "POST" });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(data.message);
+                    if (data.manage_url) {
+                        window.open(data.manage_url, "_blank");
+                    }
+                    updateSubscriptionUI();
+                    updateUnitBadge();
+                } else {
+                    alert("Failed to cancel: " + (data.detail || "Unknown error"));
+                }
+            } catch (e) {
+                alert("Failed to cancel subscription");
+            }
+        });
+    }
+
     // ========== PRICING & PAYMENTS ==========
     async function loadPricing() {
         try {
             const res = await fetch("/api/pricing");
             const data = await res.json();
+            cachedPricingData = data;
             // Update currency data from response
             if (data.currencies) {
                 currencyData = { currencies: data.currencies, locale_currency_map: data.locale_currency_map };
@@ -497,7 +565,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     userCurrency = mapped;
                 }
             }
-            renderPricing(data.plans);
+            const plans = pricingMode === "subscription" ? (data.subscription_plans || []) : (data.plans || []);
+            renderPricing(plans);
         } catch (e) {
             console.error("Failed to load pricing:", e);
         }
@@ -505,17 +574,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderPricing(plans) {
         pricingGrid.innerHTML = "";
+        if (!plans || plans.length === 0) {
+            pricingGrid.innerHTML = "<p style='text-align:center;color:var(--text-muted);padding:40px;'>No plans available</p>";
+            return;
+        }
         plans.forEach((plan, idx) => {
             const card = document.createElement("div");
             card.className = `pricing-card${plan.popular ? " popular" : ""}`;
             card.dataset.index = idx;
             const localPrice = formatPrice(plan.price_cents, { full: true });
             const localPerUnit = formatPerUnit(plan.price_cents, plan.units);
+            const isSub = pricingMode === "subscription";
             card.innerHTML = `
                 <h3>${plan.name}</h3>
-                <div class="price">${localPrice}</div>
-                <div class="unit-count">${plan.units} units</div>
-                <div class="per-unit">${localPerUnit}</div>
+                <div class="price">${localPrice}${isSub ? '<span class="price-period">/month</span>' : ""}</div>
+                <div class="unit-count">${plan.units} units${isSub ? "/month" : ""}</div>
+                <div class="per-unit">${localPerUnit}${isSub ? "/mo" : ""}</div>
             `;
             card.addEventListener("click", () => {
                 document.querySelectorAll(".pricing-card").forEach(c => c.classList.remove("selected"));
@@ -534,11 +608,17 @@ document.addEventListener("DOMContentLoaded", () => {
         paymentStatus.textContent = "Connecting to Paystack...";
         paymentStatus.style.color = "var(--primary-cyan)";
         try {
-            const res = await apiFetch("/api/payment/paystack/initialize", {
-                method: "POST",
-                body: JSON.stringify({ plan_units: selectedPlan.units, amount_cents: selectedPlan.price_cents })
-            });
+            let endpoint, body;
+            if (pricingMode === "subscription") {
+                endpoint = "/api/payment/paystack/subscribe";
+                body = { plan_name: selectedPlan.name };
+            } else {
+                endpoint = "/api/payment/paystack/initialize";
+                body = { plan_units: selectedPlan.units, amount_cents: selectedPlan.price_cents };
+            }
+            const res = await apiFetch(endpoint, { method: "POST", body: JSON.stringify(body) });
             const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Payment failed");
             if (data.authorization_url) {
                 window.location.href = data.authorization_url;
             } else {
@@ -659,13 +739,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // ========== PAYMENT SUCCESS DETECTION ==========
-    // Handle redirect back from Paystack after payment
-    if (window.location.pathname === "/payment/verify" && window.location.search.includes("trxref=")) {
+    if (window.location.search.includes("trxref=")) {
         const params = new URLSearchParams(window.location.search);
         const reference = params.get("trxref");
         const token = localStorage.getItem("tibe_token");
         if (reference && token) {
-            // Verify transaction with backend
             fetch(`/api/payment/paystack/verify?reference=${reference}`, {
                 headers: { "Authorization": `Bearer ${token}` }
             })
@@ -673,12 +751,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 .then(data => {
                     if (data.status === "success") {
                         alert(`Payment successful! ${data.units_added} units added to your account.`);
-                        // Refresh user data
                         fetch("/api/user/me", { headers: { "Authorization": `Bearer ${token}` } })
                             .then(r => r.json())
                             .then(u => {
                                 currentUser = u;
                                 updateUnitBadge();
+                                updateSubscriptionUI();
                             })
                             .catch(() => {});
                     } else {
@@ -703,6 +781,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }).then(u => {
             currentUser = u;
             showApp();
+            updateSubscriptionUI();
         }).catch(() => {
             logout();
         });

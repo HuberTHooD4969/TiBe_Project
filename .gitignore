@@ -11,6 +11,8 @@ dist/
 *.spec
 .DS_Store
 *.db
+*.db-shm
+*.db-wal
 test_*.py
 .env
 .env.local

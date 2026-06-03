@@ -8,3 +8,4 @@ yt-dlp
 imageio-ffmpeg
 python-jose[cryptography]
 httpx
+python-dotenv
