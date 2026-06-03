@@ -170,6 +170,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Listen for OAuth callback messages (from popup redirect)
     window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin) return;
         if (event.data && event.data.type === "oauth_result") {
             const result = event.data.payload;
             authToken = result.access_token;
@@ -450,7 +451,7 @@ document.addEventListener("DOMContentLoaded", () => {
         startBtn.textContent = "PROCESSING...";
         pollInterval = setInterval(async () => {
             try {
-                const res = await fetch(`/api/status/${taskId}`);
+                const res = await apiFetch(`/api/status/${taskId}`);
                 if (!res.ok) throw new Error("Status check failed");
                 const data = await res.json();
                 updateProgressUI(data);
@@ -784,14 +785,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const reference = params.get("trxref");
         const token = localStorage.getItem("tibe_token");
         if (reference && token) {
-            fetch(`/api/payment/paystack/verify?reference=${reference}`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            })
+            apiFetch(`/api/payment/paystack/verify?reference=${encodeURIComponent(reference)}`)
                 .then(r => r.json())
                 .then(data => {
                     if (data.status === "success") {
                         alert(`Payment successful! ${data.units_added} units added to your account.`);
-                        fetch("/api/user/me", { headers: { "Authorization": `Bearer ${token}` } })
+                        apiFetch("/api/user/me")
                             .then(r => r.json())
                             .then(u => {
                                 currentUser = u;

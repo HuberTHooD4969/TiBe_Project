@@ -18,12 +18,12 @@ def _load_env():
                 os.environ.setdefault(key, val)
 _load_env()
 import uuid
+import sqlite3
 try:
     import psycopg2
     import psycopg2.extras
     HAS_PSYCOPG2 = True
 except ImportError:
-    import sqlite3
     HAS_PSYCOPG2 = False
 import json
 import time
@@ -48,9 +48,13 @@ import hashlib
 import secrets
 import re
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://tibe:tibe@localhost:5432/tibe")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required. Set it in .env or export it.")
 IS_POSTGRES = DATABASE_URL.startswith("postgresql://") and HAS_PSYCOPG2
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-to-a-very-long-random-secret-key-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required. Set it in .env or export it.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
@@ -141,11 +145,13 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     return jose_jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def create_refresh_token(data: dict):
-    return create_access_token(data, expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS))
+    d = data.copy()
+    d["type"] = "refresh"
+    return create_access_token(d, expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS))
 
 def decode_token(token: str):
     try:
@@ -178,7 +184,7 @@ class Database:
         self.url = url
         self.is_pg = url.startswith("postgresql://") and HAS_PSYCOPG2
         if self.is_pg:
-            self._conn = psycopg2.connect(url)
+            self._conn = psycopg2.connect(url, connect_timeout=5)
             self._conn.autocommit = False
         else:
             self._conn = sqlite3.connect("tibe.db", check_same_thread=False)
@@ -233,7 +239,8 @@ def get_db():
             CREATE TABLE IF NOT EXISTS ad_watches (
                 id TEXT PRIMARY KEY, user_id TEXT, ip_address TEXT,
                 completed_at TEXT NOT NULL DEFAULT (datetime('now')),
-                expires_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id)
+                expires_at TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             );
             CREATE TABLE IF NOT EXISTS rate_limits (
                 ip TEXT NOT NULL, endpoint TEXT NOT NULL, timestamp REAL NOT NULL
@@ -300,7 +307,12 @@ def get_db():
         db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)")
-    db.commit()
+    # Add 'used' column to ad_watches if missing (migration)
+    try:
+        db.execute("ALTER TABLE ad_watches ADD COLUMN used INTEGER NOT NULL DEFAULT 0")
+        db.commit()
+    except Exception:
+        pass
     return db
 
 db = get_db()
@@ -427,12 +439,25 @@ def validate_url(url: str) -> bool:
         parsed = urlparse(url)
         if not parsed.scheme or parsed.scheme not in ["http", "https"]:
             return False
-        if not parsed.netloc:
+        hostname = (parsed.hostname or "").lower()
+        if not hostname:
             return False
-        blocked = ["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.", "192.168."]
-        for b in blocked:
-            if parsed.netloc.startswith(b):
-                return False
+        import socket
+        try:
+            addrs = socket.getaddrinfo(hostname, 80)
+            for family, _, _, _, sockaddr in addrs:
+                ip = sockaddr[0]
+                if ip.startswith("127.") or ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("172.16.") or ip.startswith("0.") or ip == "::1" or ip == "0.0.0.0":
+                    return False
+                parts = ip.split(".")
+                if len(parts) == 4:
+                    try:
+                        if int(parts[0]) == 169 and int(parts[1]) == 254:
+                            return False
+                    except ValueError:
+                        pass
+        except Exception:
+            return False
         return True
     except Exception:
         return False
@@ -484,7 +509,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="TiBe Web API", description="Backend for TiBe Video Processing SaaS", lifespan=lifespan, version="2.0.0")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+_allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:8000,http://localhost:3000")
+app.add_middleware(CORSMiddleware, allow_origins=_allowed_origins.split(","), allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.middleware("http")
@@ -498,7 +524,9 @@ async def add_security_headers(request: Request, call_next):
 
 # --- Auth Endpoints ---
 @app.post("/api/auth/register")
-async def register(req: RegisterRequest):
+async def register(req: RegisterRequest, request: Request = None):
+    if request and not check_rate_limit(request.client.host, "/api/auth/register"):
+        raise HTTPException(status_code=429, detail="Too many registration attempts. Please slow down.")
     existing = get_user_by_email(req.email)
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -510,7 +538,9 @@ async def register(req: RegisterRequest):
         "user": {"id": user["id"], "email": user["email"], "units_balance": user["units_balance"]}}
 
 @app.post("/api/auth/login")
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request = None):
+    if request and not check_rate_limit(request.client.host, "/api/auth/login"):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please slow down.")
     user = get_user_by_email(req.email)
     if not user or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -528,12 +558,16 @@ async def refresh_token(request: Request):
     payload = decode_token(token)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+    token_type = payload.get("type", "")
+    if token_type != "refresh":
+        raise HTTPException(status_code=401, detail="Not a refresh token")
     user_id = payload.get("sub")
     user = get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     access_token = create_access_token({"sub": user["id"]})
-    return {"access_token": access_token, "token_type": "bearer"}
+    new_refresh = create_refresh_token({"sub": user["id"], "type": "refresh"})
+    return {"access_token": access_token, "refresh_token": new_refresh, "token_type": "bearer"}
 
 @app.get("/api/user/me")
 async def get_me(user: dict = Depends(get_current_user)):
@@ -646,6 +680,10 @@ async def get_currencies():
 async def paystack_initialize(req: PaystackInitializeRequest, request: Request, user: dict = Depends(get_current_user)):
     if not PAYSTACK_SECRET_KEY:
         raise HTTPException(status_code=501, detail="Paystack not configured. Set PAYSTACK_SECRET_KEY.")
+    plans = get_pricing_plans()
+    matching = [p for p in plans if p["units"] == req.plan_units and p["price_cents"] == req.amount_cents]
+    if not matching:
+        raise HTTPException(status_code=400, detail="Invalid plan_units/amount_cents combination")
     import httpx
     base_url = str(request.base_url).rstrip("/")
     callback_url = base_url + "/?trxref={reference}"
@@ -663,7 +701,7 @@ async def paystack_initialize(req: PaystackInitializeRequest, request: Request, 
         return {"authorization_url": data["data"]["authorization_url"], "reference": data["data"]["reference"]}
 
 @app.get("/api/payment/paystack/verify")
-async def paystack_verify(reference: str = ""):
+async def paystack_verify(reference: str = "", user: dict = Depends(get_current_user)):
     if not reference:
         raise HTTPException(status_code=400, detail="Missing transaction reference")
     if not PAYSTACK_SECRET_KEY:
@@ -679,15 +717,18 @@ async def paystack_verify(reference: str = ""):
         if tx_data["status"] == "success":
             metadata = tx_data.get("metadata", {})
             user_id = metadata.get("user_id")
+            if user_id != user["id"]:
+                raise HTTPException(status_code=403, detail="Transaction does not belong to this user")
             units = int(metadata.get("units", 0))
             amount_cents = tx_data.get("amount", 0)
-            if user_id and units > 0 and not has_transaction(reference):
+            with db_lock:
+                if has_transaction(reference):
+                    return {"status": "success", "units_added": 0, "amount": amount_cents, "already_processed": True}
                 add_units(user_id, units)
                 create_transaction(user_id, amount_cents, "paystack", reference, units)
                 if metadata.get("type") == "subscription":
                     plan_name = metadata.get("plan_name", "")
                     cust_code = tx_data.get("customer", {}).get("customer_code", "")
-                    # No Paystack subscription_code in direct transaction mode
                     create_subscription_record(user_id, plan_name, "", cust_code, units, amount_cents)
             return {"status": "success", "units_added": units, "amount": amount_cents}
         raise HTTPException(status_code=400, detail=f"Payment not successful: {tx_data.get('gateway_response', 'Unknown')}")
@@ -700,7 +741,7 @@ async def paystack_webhook(request: Request):
     body = await request.body()
     sig = request.headers.get("x-paystack-signature", "")
     expected_sig = hmac.new(PAYSTACK_SECRET_KEY.encode(), body, hashlib.sha512).hexdigest()
-    if sig != expected_sig:
+    if not hmac.compare_digest(sig, expected_sig):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
     event = json.loads(body)
     if event.get("event") == "charge.success":
@@ -874,7 +915,7 @@ def ultra_enhance_parallel(video_path, output_path, task_id, num_workers=None):
         out.write(frame_data)
     out.release()
 
-def process_video_task(task_id: str, request: VideoRequest, user=None):
+def process_video_task(task_id: str, request: VideoRequest, user=None, units_spent=0):
     with tasks_db_lock:
         tasks_db[task_id] = {"status": "processing", "progress": 0, "file": None}
     downloads_dir = "downloads_server"
@@ -922,7 +963,7 @@ def process_video_task(task_id: str, request: VideoRequest, user=None):
             tasks_db[task_id]["progress"] = 100
             tasks_db[task_id]["file"] = final_video_path
         if user:
-            record_download(user["id"], task_id, request.url, request.quality, request.ultra_enhance, file_size=file_size)
+            record_download(user["id"], task_id, request.url, request.quality, request.ultra_enhance, units_spent=units_spent, file_size=file_size)
     except Exception as e:
         with tasks_db_lock:
             tasks_db[task_id]["status"] = "failed"
@@ -934,36 +975,37 @@ async def process_video(video_request: VideoRequest, background_tasks: Backgroun
         raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
     if not validate_url(video_request.url):
         raise HTTPException(status_code=400, detail="Invalid video URL.")
-    unit_cost = RESOLUTION_COST.get(video_request.quality, 0)
+    quality = video_request.quality
+    if quality not in RESOLUTION_COST:
+        raise HTTPException(status_code=400, detail=f"Invalid quality '{quality}'. Must be one of: {', '.join(RESOLUTION_COST.keys())}")
+    unit_cost = RESOLUTION_COST[quality]
     ad_watch_id = request.headers.get("X-Ad-Watch-Id")
-    remaining = user["units_balance"]
 
     if unit_cost == 0:
-        # Free resolution (720p / 1080p) — requires ad
         if ad_watch_id:
             with db_lock:
-                watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > datetime('now')", (ad_watch_id,)).fetchone()
+                watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > NOW() AND used = FALSE", (ad_watch_id,)).fetchone()
             if not watch:
                 raise HTTPException(status_code=400, detail="Invalid or expired ad watch. Please watch the ad again.")
-        else:
             with db_lock:
-                watch_row = db.execute("SELECT id FROM ad_watches WHERE user_id = ? AND expires_at > datetime('now')", (user["id"],)).fetchone()
-            if not watch_row:
-                raise HTTPException(status_code=400, detail="No valid ad watch found for free resolution. Please watch an ad first.")
+                db.execute("UPDATE ad_watches SET used = TRUE WHERE id = ?", (ad_watch_id,))
+                db.commit()
+        else:
+            raise HTTPException(status_code=400, detail="Free resolutions (720p/1080p) require watching an ad first.")
         units_spent = 0
+        remaining = user["units_balance"]
     else:
-        # Paid resolution (2K / 4K) — deduct units
-        if remaining >= unit_cost:
+        if user["units_balance"] >= unit_cost:
             remaining = deduct_unit(user["id"], unit_cost)
             if remaining < 0:
                 raise HTTPException(status_code=402, detail="No units remaining.")
             units_spent = unit_cost
         else:
-            raise HTTPException(status_code=402, detail=f"Insufficient units for {video_request.quality}. You need {unit_cost} units but have {remaining}. Please buy more units or subscribe.")
+            raise HTTPException(status_code=402, detail=f"Insufficient units for {quality}. You need {unit_cost} units but have {user['units_balance']}. Please buy more units or subscribe.")
 
     task_id = str(uuid.uuid4())
-    background_tasks.add_task(process_video_task, task_id, video_request, user)
-    return {"task_id": task_id, "message": "Video processing started.", "units_remaining": remaining, "unit_cost": unit_cost}
+    background_tasks.add_task(process_video_task, task_id, video_request, user, units_spent)
+    return {"task_id": task_id, "message": "Video processing started.", "units_remaining": remaining, "unit_cost": unit_cost, "units_spent": units_spent}
 
 @app.get("/api/process")
 async def process_video_get(request: Request, user: dict = Depends(get_current_user)):
@@ -972,17 +1014,21 @@ async def process_video_get(request: Request, user: dict = Depends(get_current_u
         "ad_duration_seconds": AD_WATCH_DURATION_SECONDS, "resolution_costs": RESOLUTION_COST}
 
 @app.get("/api/status/{task_id}")
-async def get_status(task_id: str):
+async def get_status(task_id: str, user: dict = Depends(get_current_user)):
     with tasks_db_lock:
         if task_id not in tasks_db:
             raise HTTPException(status_code=404, detail="Task not found")
         return dict(tasks_db[task_id])
 
 @app.get("/api/download/{task_id}")
-async def download_video(task_id: str):
+async def download_video(task_id: str, user: dict = Depends(get_current_user)):
+    with db_lock:
+        dl = db.execute("SELECT id FROM downloads WHERE task_id = ? AND user_id = ?", (task_id, user["id"])).fetchone()
+    if not dl:
+        raise HTTPException(status_code=404, detail="Download not found or not authorized")
     with tasks_db_lock:
         if task_id not in tasks_db:
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(status_code=404, detail="Task not found on server (may have expired). Check your download history.")
         task_info = dict(tasks_db[task_id])
     if task_info["status"] != "completed":
         raise HTTPException(status_code=400, detail="Video not ready yet.")
@@ -998,6 +1044,10 @@ async def get_download_history(user: dict = Depends(get_current_user)):
         rows = db.execute("SELECT id, task_id, url, quality, enhanced, units_spent, ad_watch_id, file_size_bytes, created_at FROM downloads WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
             (user["id"],)).fetchall()
     return {"downloads": [dict(r) for r in rows]}
+
+@app.get("/api/health")
+async def healthcheck():
+    return {"status": "ok", "database": "postgresql" if IS_POSTGRES else "sqlite"}
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 
