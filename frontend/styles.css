@@ -217,6 +217,7 @@ input:checked + .slider:before { transform:translateX(22px); background-color:wh
 .pricing-card .price small { font-size:0.8rem; color:var(--text-muted); }
 .pricing-card .unit-count { color:var(--text-muted); font-size:0.9rem; margin-bottom:10px; }
 .pricing-card .per-unit { color:var(--text-muted); font-size:0.8rem; }
+.pricing-card .video-count { color:var(--accent-purple); font-size:0.75rem; margin-top:5px; font-weight:600; }
 
 .pay-btns { display:flex; justify-content:center; gap:15px; margin:20px 0; flex-wrap:wrap; }
 .payment-methods hr { border:none; border-top:1px solid var(--glass-border); margin:20px 0; }

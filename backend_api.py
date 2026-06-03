@@ -50,6 +50,8 @@ PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "")
 AD_WATCH_DURATION_SECONDS = int(os.getenv("AD_WATCH_DURATION_SECONDS", "30"))
 AD_WATCH_COOLDOWN_MINUTES = int(os.getenv("AD_WATCH_COOLDOWN_MINUTES", "60"))
+
+RESOLUTION_COST = {"720p": 1, "1080p": 1, "2K": 2, "4K": 4}
 PRICING_PLANS_JSON = os.getenv("PRICING_PLANS", json.dumps([
     {"name": "Starter", "units": 10, "price_cents": 999, "popular": False},
     {"name": "Pro", "units": 30, "price_cents": 2499, "popular": True},
@@ -248,13 +250,13 @@ def add_units(user_id: str, units: int):
         db.execute("UPDATE users SET units_balance = units_balance + ? WHERE id = ?", (units, user_id))
         db.commit()
 
-def deduct_unit(user_id: str) -> int:
+def deduct_unit(user_id: str, count: int = 1) -> int:
     with db_lock:
         row = db.execute("SELECT units_balance FROM users WHERE id = ?", (user_id,)).fetchone()
-        if row and row["units_balance"] > 0:
-            db.execute("UPDATE users SET units_balance = units_balance - 1 WHERE id = ?", (user_id,))
+        if row and row["units_balance"] >= count:
+            db.execute("UPDATE users SET units_balance = units_balance - ? WHERE id = ?", (count, user_id))
             db.commit()
-            return row["units_balance"] - 1
+            return row["units_balance"] - count
         return -1
 
 def create_transaction(user_id: str, amount_cents: int, provider: str, provider_txn_id: str, units_added: int, status: str = "completed"):
@@ -554,11 +556,13 @@ async def apple_callback(request: Request):
 @app.get("/api/pricing")
 async def get_pricing():
     return {"plans": get_pricing_plans(), "subscription_plans": json.loads(SUBSCRIPTION_PLANS_JSON),
-        "currencies": CURRENCY_RATES, "locale_currency_map": LOCALE_CURRENCY}
+        "currencies": CURRENCY_RATES, "locale_currency_map": LOCALE_CURRENCY,
+        "resolution_costs": RESOLUTION_COST}
 
 @app.get("/api/currencies")
 async def get_currencies():
-    return {"currencies": CURRENCY_RATES, "locale_currency_map": LOCALE_CURRENCY}
+    return {"currencies": CURRENCY_RATES, "locale_currency_map": LOCALE_CURRENCY,
+        "resolution_costs": RESOLUTION_COST}
 
 # --- Paystack ---
 @app.post("/api/payment/paystack/initialize")
@@ -853,30 +857,33 @@ async def process_video(video_request: VideoRequest, background_tasks: Backgroun
         raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
     if not validate_url(video_request.url):
         raise HTTPException(status_code=400, detail="Invalid video URL.")
+    unit_cost = RESOLUTION_COST.get(video_request.quality, 1)
     ad_watch_id = request.headers.get("X-Ad-Watch-Id")
     remaining = user["units_balance"]
-    if remaining > 0:
-        remaining = deduct_unit(user["id"])
+    if remaining >= unit_cost:
+        remaining = deduct_unit(user["id"], unit_cost)
         if remaining < 0:
             raise HTTPException(status_code=402, detail="No units remaining.")
-        units_spent = 1
+        units_spent = unit_cost
     elif ad_watch_id:
         with db_lock:
             watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > datetime('now')", (ad_watch_id,)).fetchone()
         if not watch:
             raise HTTPException(status_code=400, detail="Invalid or expired ad watch.")
         units_spent = 0
+        unit_cost = 0
+        remaining = user["units_balance"]
     else:
-        raise HTTPException(status_code=402, detail="No units remaining. Purchase units or watch an ad to continue.")
+        raise HTTPException(status_code=402, detail=f"No units remaining. {video_request.quality} costs {unit_cost} units. Purchase more or watch an ad.")
     task_id = str(uuid.uuid4())
     background_tasks.add_task(process_video_task, task_id, video_request, user)
-    return {"task_id": task_id, "message": "Video processing started.", "units_remaining": remaining}
+    return {"task_id": task_id, "message": "Video processing started.", "units_remaining": remaining, "unit_cost": unit_cost}
 
 @app.get("/api/process")
 async def process_video_get(request: Request, user: dict = Depends(get_current_user)):
     fresh = get_user_by_id(user["id"])
     return {"units_balance": fresh["units_balance"], "ad_available": is_ad_available(request.client.host, user["id"]),
-        "ad_duration_seconds": AD_WATCH_DURATION_SECONDS}
+        "ad_duration_seconds": AD_WATCH_DURATION_SECONDS, "resolution_costs": RESOLUTION_COST}
 
 @app.get("/api/status/{task_id}")
 async def get_status(task_id: str):

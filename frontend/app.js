@@ -4,6 +4,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let refreshToken = localStorage.getItem("tibe_refresh_token");
     let currentUser = null;
     let selectedQuality = "1080p";
+    let resolutionCosts = {"720p": 1, "1080p": 1, "2K": 2, "4K": 4};
+    let currentUnitCost = 1;
     let pollInterval = null;
     let selectedPlan = null;
 
@@ -296,6 +298,7 @@ document.addEventListener("DOMContentLoaded", () => {
             qualityBtns.forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
             selectedQuality = btn.dataset.val;
+            currentUnitCost = resolutionCosts[selectedQuality] || 1;
         });
     });
 
@@ -320,13 +323,19 @@ document.addEventListener("DOMContentLoaded", () => {
             const preRes = await apiFetch("/api/process");
             if (!preRes.ok) throw new Error("Failed to check status");
             const preData = await preRes.json();
+            if (preData.resolution_costs) {
+                resolutionCosts = preData.resolution_costs;
+                currentUnitCost = resolutionCosts[selectedQuality] || 1;
+            }
 
-            if (preData.units_balance > 0) {
+            if (preData.units_balance >= currentUnitCost) {
                 await startProcessing(url);
-            } else if (preData.ad_available) {
+            } else if (preData.ad_available && currentUnitCost <= 1) {
                 await showAdAndProcess(url);
+            } else if (preData.ad_available) {
+                handleError(`Not enough units for ${selectedQuality}. ${selectedQuality} costs ${currentUnitCost} units. Please buy more units or use a lower resolution.`);
             } else {
-                handleError("No units remaining and ad not available. Please buy units or wait for ad cooldown.");
+                handleError(`No units remaining and ad not available. Please buy units or wait for ad cooldown. (${selectedQuality} costs ${currentUnitCost} units)`);
             }
         } catch (e) {
             handleError(e.message);
@@ -556,6 +565,11 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/pricing");
             const data = await res.json();
             cachedPricingData = data;
+            // Update resolution costs from server
+            if (data.resolution_costs) {
+                resolutionCosts = data.resolution_costs;
+                currentUnitCost = resolutionCosts[selectedQuality] || 1;
+            }
             // Update currency data from response
             if (data.currencies) {
                 currencyData = { currencies: data.currencies, locale_currency_map: data.locale_currency_map };
@@ -564,6 +578,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (mapped && data.currencies[mapped]) {
                     userCurrency = mapped;
                 }
+            }
+            // Update pricing intro text
+            const introEl = document.querySelector(".pricing-intro");
+            if (introEl) {
+                introEl.innerHTML = `Selected: <strong>${selectedQuality}</strong> &mdash; each video costs <strong>${currentUnitCost} unit${currentUnitCost > 1 ? "s" : ""}</strong>. Buy one-time packs or subscribe monthly.`;
             }
             const plans = pricingMode === "subscription" ? (data.subscription_plans || []) : (data.plans || []);
             renderPricing(plans);
@@ -578,18 +597,21 @@ document.addEventListener("DOMContentLoaded", () => {
             pricingGrid.innerHTML = "<p style='text-align:center;color:var(--text-muted);padding:40px;'>No plans available</p>";
             return;
         }
+        const cost = currentUnitCost || 1;
         plans.forEach((plan, idx) => {
             const card = document.createElement("div");
             card.className = `pricing-card${plan.popular ? " popular" : ""}`;
             card.dataset.index = idx;
             const localPrice = formatPrice(plan.price_cents, { full: true });
             const localPerUnit = formatPerUnit(plan.price_cents, plan.units);
+            const videoCount = Math.floor(plan.units / cost);
             const isSub = pricingMode === "subscription";
             card.innerHTML = `
                 <h3>${plan.name}</h3>
                 <div class="price">${localPrice}${isSub ? '<span class="price-period">/month</span>' : ""}</div>
                 <div class="unit-count">${plan.units} units${isSub ? "/month" : ""}</div>
                 <div class="per-unit">${localPerUnit}${isSub ? "/mo" : ""}</div>
+                <div class="video-count">≈ ${videoCount} ${selectedQuality} video${videoCount !== 1 ? "s" : ""}</div>
             `;
             card.addEventListener("click", () => {
                 document.querySelectorAll(".pricing-card").forEach(c => c.classList.remove("selected"));
