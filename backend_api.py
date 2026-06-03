@@ -89,12 +89,7 @@ def _ps_amount(usd_cents):
         return int((usd_cents / 100) * rate * 100)
     return usd_cents  # USD cents for USD currency
 
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "")
-APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "")
-APPLE_KEY_ID = os.getenv("APPLE_KEY_ID", "")
-APPLE_PRIVATE_KEY_PATH = os.getenv("APPLE_PRIVATE_KEY_PATH", "")
+
 
 CURRENCY_RATES = {
     "USD": {"symbol": "$", "rate": 1.0, "code": "USD"},
@@ -581,88 +576,6 @@ async def get_me(user: dict = Depends(get_current_user)):
         "is_premium": bool(fresh["is_premium"]), "created_at": fresh["created_at"],
         "subscription": sub_info}
 
-# --- OAuth ---
-OAUTH_SUCCESS_HTML = """<!DOCTYPE html><html><body><script>
-window.opener.postMessage({type:"oauth_result",payload:%s},"*");
-window.close();
-</script></body></html>"""
-
-@app.get("/api/auth/oauth/config")
-async def oauth_config():
-    return {"google_configured": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
-        "apple_configured": bool(APPLE_CLIENT_ID and APPLE_TEAM_ID),
-        "google_client_id": GOOGLE_CLIENT_ID or ""}
-
-@app.get("/api/auth/google/login")
-async def google_login(request: Request):
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=501, detail="Google OAuth not configured")
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/google/callback"
-    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={redirect_uri}&response_type=code&scope=openid+email+profile&access_type=offline"
-    return {"auth_url": auth_url}
-
-@app.get("/api/auth/google/callback")
-async def google_callback(code: str = "", request: Request = None):
-    if not code:
-        raise HTTPException(status_code=400, detail="Missing authorization code")
-    import httpx
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/google/callback"
-    async with httpx.AsyncClient() as client:
-        token_resp = await client.post("https://oauth2.googleapis.com/token", data={
-            "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": redirect_uri, "grant_type": "authorization_code"})
-        if token_resp.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to exchange auth code")
-        token_json = token_resp.json()
-        userinfo_resp = await client.get("https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {token_json['access_token']}"})
-        if userinfo_resp.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to get user info")
-        userinfo = userinfo_resp.json()
-    email = userinfo.get("email", "").lower().strip()
-    if not email:
-        raise HTTPException(status_code=400, detail="No email from Google")
-    user = get_user_by_email(email)
-    if not user:
-        password_hash = get_password_hash(str(uuid.uuid4()) + email)
-        user = create_user(email, password_hash)
-    access_token = create_access_token({"sub": user["id"]})
-    refresh_token = create_refresh_token({"sub": user["id"]})
-    payload = json.dumps({"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer",
-        "user": {"id": user["id"], "email": user["email"], "units_balance": user["units_balance"]}})
-    return HTMLResponse(content=OAUTH_SUCCESS_HTML % payload)
-
-@app.get("/api/auth/apple/login")
-async def apple_login(request: Request):
-    if not APPLE_CLIENT_ID:
-        raise HTTPException(status_code=501, detail="Apple OAuth not configured")
-    redirect_uri = str(request.base_url).rstrip("/") + "/api/auth/apple/callback"
-    auth_url = f"https://appleid.apple.com/auth/authorize?client_id={APPLE_CLIENT_ID}&redirect_uri={redirect_uri}&response_type=code+id_token&scope=name+email&response_mode=form_post"
-    return {"auth_url": auth_url}
-
-@app.post("/api/auth/apple/callback")
-async def apple_callback(request: Request):
-    form = await request.form()
-    id_token = form.get("id_token")
-    if not id_token:
-        raise HTTPException(status_code=400, detail="Missing id_token")
-    try:
-        payload = jose_jwt.decode(id_token, "", options={"verify_signature": False})
-        email = payload.get("email", "").lower().strip()
-        if not email:
-            raise HTTPException(status_code=400, detail="No email from Apple")
-    except JWTError:
-        raise HTTPException(status_code=400, detail="Invalid id_token")
-    user = get_user_by_email(email)
-    if not user:
-        password_hash = get_password_hash(str(uuid.uuid4()) + email)
-        user = create_user(email, password_hash)
-    access_token = create_access_token({"sub": user["id"]})
-    refresh_token = create_refresh_token({"sub": user["id"]})
-    payload = json.dumps({"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer",
-        "user": {"id": user["id"], "email": user["email"], "units_balance": user["units_balance"]}})
-    return HTMLResponse(content=OAUTH_SUCCESS_HTML % payload)
-
 # --- Pricing & Currency ---
 @app.get("/api/pricing")
 async def get_pricing():
@@ -984,7 +897,7 @@ async def process_video(video_request: VideoRequest, background_tasks: Backgroun
     if unit_cost == 0:
         if ad_watch_id:
             with db_lock:
-                watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > NOW() AND used = FALSE", (ad_watch_id,)).fetchone()
+                watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > datetime('now') AND used = FALSE", (ad_watch_id,)).fetchone()
             if not watch:
                 raise HTTPException(status_code=400, detail="Invalid or expired ad watch. Please watch the ad again.")
             with db_lock:

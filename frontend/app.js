@@ -30,12 +30,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const payPaystackBtn = document.getElementById("pay-paystack-btn");
     const paymentStatus = document.getElementById("payment-status");
 
-    // OAuth buttons
-    const googleLoginBtn = document.getElementById("google-login-btn");
-    const appleLoginBtn = document.getElementById("apple-login-btn");
-    const googleRegBtn = document.getElementById("google-reg-btn");
-    const appleRegBtn = document.getElementById("apple-reg-btn");
-
     // Currency state
     let userCurrency = "USD";
     let currencyData = null;
@@ -166,51 +160,6 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.removeItem("tibe_token");
         localStorage.removeItem("tibe_refresh_token");
         showAuth();
-    }
-
-    // Listen for OAuth callback messages (from popup redirect)
-    window.addEventListener("message", (event) => {
-        if (event.origin !== window.location.origin) return;
-        if (event.data && event.data.type === "oauth_result") {
-            const result = event.data.payload;
-            authToken = result.access_token;
-            refreshToken = result.refresh_token;
-            currentUser = result.user;
-            localStorage.setItem("tibe_token", authToken);
-            localStorage.setItem("tibe_refresh_token", refreshToken);
-            showApp();
-        }
-    });
-
-    // ========== OAUTH HANDLERS ==========
-    async function initOAuth() {
-        try {
-            const res = await fetch("/api/auth/oauth/config");
-            const config = await res.json();
-            const showGoogleBtn = (btn) => {
-                btn.title = config.google_configured ? "Sign in with Google" : "Google OAuth not configured";
-                btn.style.opacity = config.google_configured ? "1" : "0.4";
-            };
-            const showAppleBtn = (btn) => {
-                btn.title = config.apple_configured ? "Sign in with Apple" : "Apple OAuth not configured";
-                btn.style.opacity = config.apple_configured ? "1" : "0.4";
-            };
-            [googleLoginBtn, googleRegBtn].forEach(showGoogleBtn);
-            [appleLoginBtn, appleRegBtn].forEach(showAppleBtn);
-        } catch (e) { /* ignore */ }
-    }
-
-    function startOAuthFlow(provider) {
-        fetch(`/api/auth/${provider}/login`)
-            .then(r => r.json())
-            .then(data => {
-                if (!data.auth_url) throw new Error("No auth URL");
-                const w = 600, h = 700;
-                const left = (screen.width / 2) - (w / 2);
-                const top = (screen.height / 2) - (h / 2);
-                window.open(data.auth_url, `${provider}_auth`, `width=${w},height=${h},left=${left},top=${top}`);
-            })
-            .catch(e => console.error("OAuth error:", e));
     }
 
     // ========== CURRENCY DETECTION ==========
@@ -671,14 +620,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // ========== OAUTH CLICK HANDLERS ==========
-    [googleLoginBtn, googleRegBtn].forEach(btn => {
-        btn.addEventListener("click", () => startOAuthFlow("google"));
-    });
-    [appleLoginBtn, appleRegBtn].forEach(btn => {
-        btn.addEventListener("click", () => startOAuthFlow("apple"));
-    });
-
     // ========== AUTH EVENT LISTENERS ==========
     showRegister.addEventListener("click", (e) => {
         e.preventDefault();
@@ -810,7 +751,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ========== INIT ==========
-    initOAuth();
     detectCurrency();
 
     if (authToken && refreshToken) {
