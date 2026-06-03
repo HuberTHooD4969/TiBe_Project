@@ -18,7 +18,13 @@ def _load_env():
                 os.environ.setdefault(key, val)
 _load_env()
 import uuid
-import sqlite3
+try:
+    import psycopg2
+    import psycopg2.extras
+    HAS_PSYCOPG2 = True
+except ImportError:
+    import sqlite3
+    HAS_PSYCOPG2 = False
 import json
 import time
 import threading
@@ -40,8 +46,10 @@ from pydantic import BaseModel, field_validator
 from jose import JWTError, jwt as jose_jwt
 import hashlib
 import secrets
+import re
 
-DATABASE_URL = os.getenv("DATABASE_URL", "tibe.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://tibe:tibe@localhost:5432/tibe")
+IS_POSTGRES = DATABASE_URL.startswith("postgresql://") and HAS_PSYCOPG2
 SECRET_KEY = os.getenv("SECRET_KEY", "change-this-to-a-very-long-random-secret-key-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
@@ -63,11 +71,6 @@ SUBSCRIPTION_PLANS_JSON = os.getenv("SUBSCRIPTION_PLANS", json.dumps([
     {"name": "Unlimited Monthly", "units": 200, "price_cents": 4999, "popular": False},
 ]))
 MAX_FRAME_WORKERS = int(os.getenv("MAX_FRAME_WORKERS", str(os.cpu_count() or 4)))
-SUBSCRIPTION_PLANS_JSON = os.getenv("SUBSCRIPTION_PLANS", json.dumps([
-    {"name": "Basic Monthly", "units": 20, "price_cents": 1499, "popular": False},
-    {"name": "Pro Monthly", "units": 60, "price_cents": 3999, "popular": True},
-    {"name": "Unlimited Monthly", "units": 200, "price_cents": 9999, "popular": False},
-]))
 paystack_plan_codes = {}
 paystack_plan_codes_lock = threading.Lock()
 
@@ -170,19 +173,41 @@ db_lock = threading.Lock()
 tasks_db_lock = threading.Lock()
 tasks_db = {}
 
+class Database:
+    def __init__(self, url):
+        self.url = url
+        self.is_pg = url.startswith("postgresql://") and HAS_PSYCOPG2
+        if self.is_pg:
+            self._conn = psycopg2.connect(url)
+            self._conn.autocommit = False
+        else:
+            self._conn = sqlite3.connect("tibe.db", check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+    def _sql(self, sql):
+        if self.is_pg:
+            sql = sql.replace("?", "%s")
+            sql = re.sub(r"datetime\('now'\s*,\s*'\+?([^']+)'\)", r"(NOW() + INTERVAL '\1')", sql)
+            sql = re.sub(r"datetime\('now'\)", "NOW()", sql)
+        return sql
+    def execute(self, sql, params=None):
+        if self.is_pg:
+            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(self._sql(sql), params)
+            return cur
+        cur = self._conn.execute(sql, params or ())
+        return cur
+    def commit(self):
+        self._conn.commit()
+    def rollback(self):
+        self._conn.rollback()
+
 def get_db():
-    conn = sqlite3.connect(DATABASE_URL, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
-
-db = get_db()
-
-def init_db():
-    with db_lock:
-        db.executescript("""
+    db = Database(DATABASE_URL)
+    if not db.is_pg:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("PRAGMA busy_timeout=5000")
+        db._conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL, units_balance INTEGER NOT NULL DEFAULT 0,
@@ -229,9 +254,56 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
             CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id);
         """)
-        db.commit()
+    else:
+        db.execute("""CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL, units_balance INTEGER NOT NULL DEFAULT 0,
+            is_premium INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS transactions (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+            amount_cents INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'usd',
+            provider TEXT NOT NULL, provider_txn_id TEXT,
+            units_added INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS downloads (
+            id TEXT PRIMARY KEY, user_id TEXT, task_id TEXT UNIQUE,
+            url TEXT NOT NULL, quality TEXT NOT NULL DEFAULT '1080p',
+            enhanced INTEGER NOT NULL DEFAULT 0, units_spent INTEGER NOT NULL DEFAULT 0,
+            ad_watch_id TEXT, file_size_bytes INTEGER DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS ad_watches (
+            id TEXT PRIMARY KEY, user_id TEXT, ip_address TEXT,
+            completed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            expires_at TIMESTAMP NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id)
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS rate_limits (
+            ip TEXT NOT NULL, endpoint TEXT NOT NULL, timestamp DOUBLE PRECISION NOT NULL
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE,
+            plan_name TEXT NOT NULL, paystack_subscription_code TEXT,
+            paystack_customer_code TEXT, units_per_month INTEGER NOT NULL,
+            monthly_price_cents INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            current_period_start TIMESTAMP, current_period_end TIMESTAMP,
+            cancelled_at TIMESTAMP, created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )""")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_ip ON rate_limits(ip, timestamp)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_ad_watches_ip ON ad_watches(ip_address, completed_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id)")
+    db.commit()
+    return db
 
-init_db()
+db = get_db()
 
 def get_user_by_id(user_id: str):
     with db_lock:
