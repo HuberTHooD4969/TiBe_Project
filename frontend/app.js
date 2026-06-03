@@ -303,6 +303,16 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // ========== PROCESSING ENGINE ==========
+    function askBuyUnits(quality, needed, balance) {
+        const modal = document.getElementById("pricing-modal");
+        if (modal) {
+            loadPricing();
+            paymentMethodsSection.style.display = "none";
+            selectedPlan = null;
+            modal.classList.remove("hidden");
+        }
+    }
+
     startBtn.addEventListener("click", async () => {
         const url = urlInput.value.trim();
         if (!url) {
@@ -311,7 +321,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         startBtn.disabled = true;
-        startBtn.textContent = "CHECKING ACCOUNT...";
+        startBtn.textContent = "CHECKING...";
         dashboard.classList.remove("hidden");
         resultDashboard.classList.add("hidden");
         progressBar.style.width = "0%";
@@ -325,24 +335,32 @@ document.addEventListener("DOMContentLoaded", () => {
             const preData = await preRes.json();
             if (preData.resolution_costs) {
                 resolutionCosts = preData.resolution_costs;
-                currentUnitCost = resolutionCosts[selectedQuality] || 1;
+                currentUnitCost = resolutionCosts[selectedQuality] || 0;
             }
 
-            if (preData.units_balance >= currentUnitCost) {
-                await startProcessing(url);
-            } else if (preData.ad_available && currentUnitCost <= 1) {
+            if (currentUnitCost === 0) {
+                // Free resolution (720p / 1080p) — require ad
                 await showAdAndProcess(url);
-            } else if (preData.ad_available) {
-                handleError(`Not enough units for ${selectedQuality}. ${selectedQuality} costs ${currentUnitCost} units. Please buy more units or use a lower resolution.`);
             } else {
-                handleError(`No units remaining and ad not available. Please buy units or wait for ad cooldown. (${selectedQuality} costs ${currentUnitCost} units)`);
+                // Paid resolution (2K / 4K) — check units
+                if (preData.units_balance >= currentUnitCost) {
+                    await processWithUnits(url);
+                } else {
+                    startBtn.disabled = false;
+                    startBtn.textContent = "START ULTRA ENGINE";
+                    statusText.textContent = `Need ${currentUnitCost} units for ${selectedQuality}. You have ${preData.units_balance}.`;
+                    statusText.style.color = "#ff3366";
+                    if (confirm(`You need ${currentUnitCost} units for ${selectedQuality} processing, but you only have ${preData.units_balance} units.\n\nTap OK to buy units or subscribe.`)) {
+                        askBuyUnits(selectedQuality, currentUnitCost, preData.units_balance);
+                    }
+                }
             }
         } catch (e) {
             handleError(e.message);
         }
     });
 
-    async function startProcessing(url) {
+    async function processWithUnits(url) {
         statusText.textContent = "Starting Engine...";
         startBtn.textContent = "PROCESSING...";
         try {
@@ -358,14 +376,10 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) {
                 const err = await res.json();
                 if (res.status === 402) {
-                    // No units - try ad route
-                    const preRes = await apiFetch("/api/process");
-                    const preData = await preRes.json();
-                    if (preData.ad_available) {
-                        await showAdAndProcess(url);
-                        return;
+                    if (confirm(err.detail + "\n\nTap OK to buy more units.")) {
+                        askBuyUnits(selectedQuality, currentUnitCost, 0);
                     }
-                    throw new Error(err.detail || "No units. Please buy more.");
+                    return;
                 }
                 throw new Error(err.detail || "Failed to start processing.");
             }
@@ -406,10 +420,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     try {
                         const adRes = await apiFetch("/api/ads/complete", { method: "POST" });
                         const adData = await adRes.json();
-                        adWatchId = adData.ad_watch_id;
+                        const watchId = adData.ad_watch_id;
                         const res = await apiFetch("/api/process", {
                             method: "POST",
-                            headers: { "Content-Type": "application/json", "X-Ad-Watch-Id": adWatchId },
+                            headers: { "Content-Type": "application/json", "X-Ad-Watch-Id": watchId },
                             body: JSON.stringify({
                                 url: url,
                                 quality: selectedQuality,
@@ -582,7 +596,11 @@ document.addEventListener("DOMContentLoaded", () => {
             // Update pricing intro text
             const introEl = document.querySelector(".pricing-intro");
             if (introEl) {
-                introEl.innerHTML = `Selected: <strong>${selectedQuality}</strong> &mdash; each video costs <strong>${currentUnitCost} unit${currentUnitCost > 1 ? "s" : ""}</strong>. Buy one-time packs or subscribe monthly.`;
+                if (currentUnitCost === 0) {
+                    introEl.innerHTML = `<strong>${selectedQuality}</strong> is <strong>FREE</strong> (ad-supported). Buy units for <strong>2K</strong> (2 units) or <strong>4K</strong> (4 units) processing.`;
+                } else {
+                    introEl.innerHTML = `Selected: <strong>${selectedQuality}</strong> &mdash; each video costs <strong>${currentUnitCost} unit${currentUnitCost > 1 ? "s" : ""}</strong>. Buy one-time packs or subscribe monthly.`;
+                }
             }
             const plans = pricingMode === "subscription" ? (data.subscription_plans || []) : (data.plans || []);
             renderPricing(plans);

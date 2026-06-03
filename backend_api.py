@@ -51,11 +51,16 @@ PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY", "")
 AD_WATCH_DURATION_SECONDS = int(os.getenv("AD_WATCH_DURATION_SECONDS", "30"))
 AD_WATCH_COOLDOWN_MINUTES = int(os.getenv("AD_WATCH_COOLDOWN_MINUTES", "60"))
 
-RESOLUTION_COST = {"720p": 1, "1080p": 1, "2K": 2, "4K": 4}
+RESOLUTION_COST = {"720p": 0, "1080p": 0, "2K": 2, "4K": 4}
 PRICING_PLANS_JSON = os.getenv("PRICING_PLANS", json.dumps([
-    {"name": "Starter", "units": 10, "price_cents": 999, "popular": False},
-    {"name": "Pro", "units": 30, "price_cents": 2499, "popular": True},
-    {"name": "Ultra", "units": 100, "price_cents": 6999, "popular": False},
+    {"name": "Starter", "units": 10, "price_cents": 499, "popular": False},
+    {"name": "Pro", "units": 30, "price_cents": 1299, "popular": True},
+    {"name": "Ultra", "units": 100, "price_cents": 3999, "popular": False},
+]))
+SUBSCRIPTION_PLANS_JSON = os.getenv("SUBSCRIPTION_PLANS", json.dumps([
+    {"name": "Basic Monthly", "units": 20, "price_cents": 799, "popular": False},
+    {"name": "Pro Monthly", "units": 60, "price_cents": 1999, "popular": True},
+    {"name": "Unlimited Monthly", "units": 200, "price_cents": 4999, "popular": False},
 ]))
 MAX_FRAME_WORKERS = int(os.getenv("MAX_FRAME_WORKERS", str(os.cpu_count() or 4)))
 SUBSCRIPTION_PLANS_JSON = os.getenv("SUBSCRIPTION_PLANS", json.dumps([
@@ -857,24 +862,33 @@ async def process_video(video_request: VideoRequest, background_tasks: Backgroun
         raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
     if not validate_url(video_request.url):
         raise HTTPException(status_code=400, detail="Invalid video URL.")
-    unit_cost = RESOLUTION_COST.get(video_request.quality, 1)
+    unit_cost = RESOLUTION_COST.get(video_request.quality, 0)
     ad_watch_id = request.headers.get("X-Ad-Watch-Id")
     remaining = user["units_balance"]
-    if remaining >= unit_cost:
-        remaining = deduct_unit(user["id"], unit_cost)
-        if remaining < 0:
-            raise HTTPException(status_code=402, detail="No units remaining.")
-        units_spent = unit_cost
-    elif ad_watch_id:
-        with db_lock:
-            watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > datetime('now')", (ad_watch_id,)).fetchone()
-        if not watch:
-            raise HTTPException(status_code=400, detail="Invalid or expired ad watch.")
+
+    if unit_cost == 0:
+        # Free resolution (720p / 1080p) — requires ad
+        if ad_watch_id:
+            with db_lock:
+                watch = db.execute("SELECT id FROM ad_watches WHERE id = ? AND expires_at > datetime('now')", (ad_watch_id,)).fetchone()
+            if not watch:
+                raise HTTPException(status_code=400, detail="Invalid or expired ad watch. Please watch the ad again.")
+        else:
+            with db_lock:
+                watch_row = db.execute("SELECT id FROM ad_watches WHERE user_id = ? AND expires_at > datetime('now')", (user["id"],)).fetchone()
+            if not watch_row:
+                raise HTTPException(status_code=400, detail="No valid ad watch found for free resolution. Please watch an ad first.")
         units_spent = 0
-        unit_cost = 0
-        remaining = user["units_balance"]
     else:
-        raise HTTPException(status_code=402, detail=f"No units remaining. {video_request.quality} costs {unit_cost} units. Purchase more or watch an ad.")
+        # Paid resolution (2K / 4K) — deduct units
+        if remaining >= unit_cost:
+            remaining = deduct_unit(user["id"], unit_cost)
+            if remaining < 0:
+                raise HTTPException(status_code=402, detail="No units remaining.")
+            units_spent = unit_cost
+        else:
+            raise HTTPException(status_code=402, detail=f"Insufficient units for {video_request.quality}. You need {unit_cost} units but have {remaining}. Please buy more units or subscribe.")
+
     task_id = str(uuid.uuid4())
     background_tasks.add_task(process_video_task, task_id, video_request, user)
     return {"task_id": task_id, "message": "Video processing started.", "units_remaining": remaining, "unit_cost": unit_cost}
