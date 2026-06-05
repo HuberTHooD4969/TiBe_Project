@@ -91,7 +91,9 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 const data = await res.json();
                 authToken = data.access_token;
+                refreshToken = data.refresh_token;
                 localStorage.setItem("tibe_token", authToken);
+                localStorage.setItem("tibe_refresh_token", refreshToken);
                 return true;
             }
         } catch (e) { /* ignore */ }

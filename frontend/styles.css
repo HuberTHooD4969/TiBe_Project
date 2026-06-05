@@ -255,9 +255,31 @@ input:checked + .slider:before { transform:translateX(22px); background-color:wh
 .animate-fade { animation:fadeIn 0.3s ease; }
 
 /* Responsive */
-@media (max-width:480px) {
+@media (max-width:640px) {
+    .container { padding:12px; }
+    .glass-panel { padding:20px; border-radius:16px; }
+    .logo-text { font-size:2.2rem; }
+    .auth-title { font-size:1.4rem; }
     .pricing-grid { grid-template-columns:1fr; }
-    .top-bar { flex-direction:column; text-align:center; }
+    .pricing-card .price { font-size:1.6rem; }
+    .top-bar { flex-direction:column; text-align:center; padding:12px 15px; }
     .top-bar-right { justify-content:center; }
     .options-row { flex-direction:column; align-items:stretch; }
+    .segment-control { flex-wrap:wrap; justify-content:center; }
+    .pricing-modal { max-width:100%; margin:0 10px; }
+    .modal-content { padding:20px !important; }
+    .modal-header h2 { font-size:1.1rem; }
+    .ad-countdown { font-size:3rem; }
+    input[type="url"], input[type="email"], input[type="password"] { padding:14px; font-size:0.95rem; }
+    .primary-btn { padding:16px; font-size:1rem; }
+}
+@media (max-width:400px) {
+    .logo-text { font-size:1.7rem; gap:8px; }
+    .badge { font-size:0.6rem; padding:3px 8px; }
+    .container { padding:8px; }
+    .glass-panel { padding:15px; border-radius:12px; }
+    .segment-btn { padding:6px 12px; font-size:0.85rem; }
+    .auth-title { font-size:1.2rem; }
+    .subscription-banner { flex-direction:column; text-align:center; }
+    .pricing-card { padding:15px; }
 }
