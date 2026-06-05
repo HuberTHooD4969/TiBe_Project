@@ -18,6 +18,6 @@ services:
       - key: AD_WATCH_COOLDOWN_MINUTES
         value: "60"
       - key: MAX_FRAME_WORKERS
-        value: "2"
+        value: "1"
       - key: CORS_ORIGINS
-        value: "https://huberthood4969.github.io"
+        value: "https://huberthood4969.github.io,https://tibe-ultra.onrender.com"

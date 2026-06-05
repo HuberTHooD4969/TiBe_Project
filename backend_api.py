@@ -28,12 +28,7 @@ except ImportError:
 import json
 import time
 import threading
-import cv2
-import numpy as np
-import yt_dlp
-import imageio_ffmpeg
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -777,8 +772,11 @@ async def complete_ad_watch(request: Request, user: dict = Depends(get_current_u
 
 # --- Video Processing ---
 def ultra_enhance_parallel(video_path, output_path, task_id, num_workers=None):
+    import cv2
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     if num_workers is None:
-        num_workers = MAX_FRAME_WORKERS
+        num_workers = min(MAX_FRAME_WORKERS, 2)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise Exception("Failed to open raw video file")
@@ -790,8 +788,7 @@ def ultra_enhance_parallel(video_path, output_path, task_id, num_workers=None):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
-    def process_frame(frame_data):
-        idx, frame = frame_data
+    def process_frame(frame):
         frame = cv2.fastNlMeansDenoisingColored(frame, None, 10, 10, 7, 21)
         frame = cv2.detailEnhance(frame, sigma_s=10, sigma_r=0.15)
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
@@ -799,36 +796,37 @@ def ultra_enhance_parallel(video_path, output_path, task_id, num_workers=None):
         l = cv2.equalizeHist(l)
         frame = cv2.merge((l, a, b))
         frame = cv2.cvtColor(frame, cv2.COLOR_LAB2BGR)
-        return (idx, frame)
+        return frame
 
-    frames = []
-    frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append((frame_idx, frame))
-        frame_idx += 1
-    cap.release()
-    total = len(frames)
-    processed = [None] * total
-    batch_size = max(1, total // (num_workers * 4))
+    CHUNK = max(1, min(30, total_frames // (num_workers * 2)))
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        for i in range(0, total, batch_size):
-            batch = frames[i:i + batch_size]
-            futures = {executor.submit(process_frame, f): f[0] for f in batch}
-            for future in as_completed(futures):
-                idx, result = future.result()
-                processed[idx] = result
-            progress = 50 + int(45 * min(i + batch_size, total) / total)
-            with tasks_db_lock:
-                if task_id in tasks_db:
-                    tasks_db[task_id]["progress"] = progress
-    for frame_data in processed:
-        out.write(frame_data)
+        frames_batch = []
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames_batch.append(frame)
+            frame_idx += 1
+            if len(frames_batch) >= CHUNK:
+                results = list(executor.map(process_frame, frames_batch))
+                for r in results:
+                    out.write(r)
+                frames_batch = []
+                progress = 50 + int(45 * frame_idx / total_frames)
+                with tasks_db_lock:
+                    if task_id in tasks_db:
+                        tasks_db[task_id]["progress"] = progress
+        if frames_batch:
+            results = list(executor.map(process_frame, frames_batch))
+            for r in results:
+                out.write(r)
+    cap.release()
     out.release()
 
 def process_video_task(task_id: str, request: VideoRequest, user=None, units_spent=0):
+    import yt_dlp
+    import imageio_ffmpeg
     with tasks_db_lock:
         tasks_db[task_id] = {"status": "processing", "progress": 0, "file": None}
     downloads_dir = "downloads_server"
