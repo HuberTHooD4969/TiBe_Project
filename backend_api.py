@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Depends
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
