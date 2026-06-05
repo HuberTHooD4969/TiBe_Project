@@ -16,3 +16,4 @@ dist/
 test_*.py
 .env
 .env.local
+*.log
